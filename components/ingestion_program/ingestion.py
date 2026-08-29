@@ -36,6 +36,8 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
         case_id = case.get("id")
         model_id = case.get("model_id")
         problem = case.get("problem")
+        if isinstance(problem, dict):
+            problem = problem.get("original_problem")
         if not isinstance(case_id, str) or not case_id:
             raise IngestionError(f"{path.name}:{line_number}: invalid id")
         if case_id in seen_ids:
@@ -44,6 +46,7 @@ def load_cases(path: Path) -> list[dict[str, Any]]:
             raise IngestionError(f"{path.name}:{line_number}: invalid model_id")
         if not isinstance(problem, str) or not problem:
             raise IngestionError(f"{path.name}:{line_number}: invalid problem")
+        case["problem"] = problem
         seen_ids.add(case_id)
         cases.append(case)
     if not cases:
