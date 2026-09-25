@@ -134,12 +134,20 @@ def _discover_blocks(model: Any) -> list[tuple[str, torch.nn.Module]]:
 def _prompt_ids(tokenizer: Any, text: str) -> list[int]:
     content = text + ANSWER_INSTRUCTION
     if getattr(tokenizer, "chat_template", None):
-        prompt = tokenizer.apply_chat_template(
-            [{"role": "user", "content": content}],
-            tokenize=False,
-            add_generation_prompt=True,
-            enable_thinking=False,
-        )
+        messages = [{"role": "user", "content": content}]
+        try:
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
         # Some templates always open a thinking section, ignoring the option above.
         if prompt.rstrip().endswith("<think>"):
             prompt += "</think>\n"
