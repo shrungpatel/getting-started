@@ -4,3 +4,4 @@ data/
 dist/
 .idea/
 solutions/*.zip
+solutions/*/*.zip

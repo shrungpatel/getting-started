@@ -1,72 +1,65 @@
 # Representation Stability
 
-A basic, training-free baseline that asks: when the instruction wording changes
-without changing the mathematics, does the model's representation stay similar?
-This is inspired by the logic-preserving variation idea in the proposed LPDS
-notes; it is not a reproduction of that paper.
+This solution trains a small robustness classifier on top of frozen language-model representations. For each problem, it compares the final hidden-state representation of the original prompt with three instruction-only variants.
 
 ## Method
 
-For each original problem, the solution:
+For each problem, the implementation:
 
-1. Creates three variants by prepending different instructions to solve the
-   problem. The original problem text, including all equations, stays intact.
-2. Formats the original and variants with the same user-only chat template.
-3. Runs four forward passes and extracts the final-layer hidden state at the
-   last prompt token (including the generation prefix when the template adds it).
-4. Computes cosine distance between the original representation and each variant:
+1. Creates three variants by prepending different instructions without changing the mathematical problem.
+2. Formats the original and variants with the tokenizer's user-only chat template.
+3. Runs four forward passes and extracts the final prompt-token hidden state.
+4. Projects the four representations with a trainable projection.
+5. Computes the mean cosine distance between the original and variant projections.
+6. Predicts robustness with a trainable classifier using the original projection and distance.
 
-   `distance = 1 - dot(h_original, h_variant) / (norm(h_original) * norm(h_variant))`
+The large language model is frozen. Only the projection and classifier head are trained.
 
-5. Predicts `True` when the mean distance is below `DISTANCE_THRESHOLD`.
-
-**The default threshold of 0.05 is an uncalibrated heuristic.** No predictor has
-been trained and no robustness accuracy is claimed. Change the constant in
-`stability_inference.py` after calibrating on public development labels, keeping
-related problems in the same split and reserving a separate evaluation split.
-
-This measures **prompt-conditioned stability**, not stability while generating a
-reasoning trace. Low distance does not prove mathematical correctness or identical
-internal computation. Shared chat-template tokens and hidden-state anisotropy can
-also yield high similarity. These instruction-only perturbations are deliberately
-conservative and much narrower than mathematical paraphrasing or difficulty
-scaling; they may not predict robustness to those broader changes.
+This measures prompt-conditioned representation stability. It does not prove mathematical correctness or identical internal reasoning.
 
 ## Files
 
-- `solution.py`: required `are_robust(model_id: str, problems: list[str]) -> list[bool]` interface.
-- `stability_inference.py`: variants, offline model loading, extraction, and scoring.
+- `solution.py`: Codabench entry point; loads the trained classifier artifact once.
+- `stability_inference.py`: model loading, representation extraction, training, scoring, and artifact serialization.
+- `train_stability.py`: command-line training wrapper for JSONL examples.
+- `stability_artifacts/<model-id>.pt`: generated model-specific classifier artifact; create one before running inference or packaging a submission.
 
-There are no training artifacts or additional dependencies. Loader regression tests
-are in `../../tests/test_representation_stability.py`.
+## Training data
 
-## Runtime behavior
+`train_stability.py` accepts one JSON record per line in either format:
 
-Accepts Hugging Face checkpoint IDs without a model allowlist. The legacy alias
-`qwen3-8b:low` resolves to `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`.
-Model and tokenizer loading use `local_files_only=True`; each checkpoint must
-already be cached and supported by the installed Transformers runtime. The base
-model must expose `last_hidden_state` for text inputs. Quantized checkpoints also
-require their runtime backends; accepting an ID does not guarantee compatibility.
-The current model is reused, with evaluation mode and inference-only forward
-passes, and evicted before a different checkpoint loads. On GPU workers,
-`device_map="auto"` enables GPU/CPU placement rather than forcing the entire
-checkpoint onto one GPU. Offloading can increase runtime substantially.
-Sequences are processed individually to keep memory use bounded and avoid padding
-alignment issues. No solution text is generated or vocabulary logits computed.
+```json
+{"problem": "Find the value of 2 + 2.", "label": true}
+["Solve x^2 - 5x + 6 = 0.", false]
+```
 
-Predictions preserve input order and use native Python booleans. Empty input
-returns `[]`. Blank problems, invalid representations, and
-problems for which any formatted variant exceeds 2,048 tokens (or the model's
-smaller context limit) receive `False`. Inputs are not truncated because dropping
-mathematics could invalidate a comparison. Length-limit fallbacks emit warnings.
-Model-loading and unexpected inference errors propagate
-rather than silently disguising a broken runtime as robustness predictions.
+`true`/`1` means robust and `false`/`0` means non-robust. Keep related or near-duplicate problems in the same split to avoid data leakage, and reserve a separate evaluation split.
+
+## Train
+
+From this directory, after the model has been cached locally:
+
+```bash
+uv run python train_stability.py data/train.jsonl \
+  --model-id Qwen/Qwen3-8B \
+  --epochs 3
+```
+
+By default this writes `stability_artifacts/Qwen__Qwen3-8B.pt`. You can choose a different output path with `--output`, but the submission entry point expects the model-specific filename by default.
+
+The model must already be available in the Hugging Face cache because loading uses `local_files_only=True`. Cache it with:
+
+```bash
+uv run hf download deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
+```
+
+The legacy model alias `qwen3-8b:low` is also supported. Any exact Hugging Face model ID is accepted without changing the source code, provided that checkpoint is cached locally and supported by Transformers.
+
+The classifier is trained on representations from one base model. Because models can have different hidden sizes and different representation spaces, train a separate classifier artifact for each base model you intend to evaluate. A classifier trained for one model should not be reused for another model merely because both are supported by the loader.
 
 ## Run locally
 
-From `getting-started`, after importing the public validation sample and caching
-the models present in the input:
+After training and creating the classifier artifact, run from `getting-started`:
 
 ```bash
 uv run scripts/run_local.py solutions/representation-stability \
@@ -74,6 +67,12 @@ uv run scripts/run_local.py solutions/representation-stability \
   --reference-dir data/val-sample/reference
 ```
 
-For submission, place `solution.py` and `stability_inference.py` at the ZIP root.
-Do not bundle model weights. Benchmark the four-forward-pass cost against the
-evaluation time limit before submitting.
+The submission must include `solution.py`, `stability_inference.py`, and the generated classifier artifact. Do not bundle the base model weights. If evaluating multiple model IDs, package and select a separately trained artifact for each model ID rather than sharing one artifact.
+
+## Runtime behavior
+
+- Each problem requires four individual forward passes.
+- GPU workers use automatic device placement and reduced precision when supported.
+- CPU inference is supported but can be slow and memory-intensive for the 8B model.
+- Blank problems and prompts exceeding 2,048 tokens are predicted as `False`.
+- Predictions preserve input order and are returned as native Python booleans.

@@ -34,6 +34,7 @@ class ModelLoadingTests(unittest.TestCase):
         config.get_text_config.return_value = SimpleNamespace(max_position_embeddings=4096)
         model = SimpleNamespace(config=config)
         inputs = {"input_ids": stability.torch.ones((1, 3), dtype=stability.torch.long)}
+        classifier = stability.RobustnessClassifier(hidden_size=2)
         with (
             patch.object(stability, "_load_model", return_value=(Mock(), model)) as load,
             patch.object(stability, "_tokenize", return_value=inputs),
@@ -41,15 +42,38 @@ class ModelLoadingTests(unittest.TestCase):
         ):
             for model_id in model_ids:
                 with self.subTest(model_id=model_id):
-                    self.assertEqual(stability.predict_robustness(model_id, ["1 + 1?"]), [True])
+                    predictions = stability.predict_robustness(
+                        model_id,
+                        ["1 + 1?"],
+                        classifier,
+                    )
+                    self.assertEqual(len(predictions), 1)
                     load.assert_called_with(model_id)
-            self.assertEqual(stability.predict_robustness("qwen3-8b:low", ["1 + 1?"]), [True])
-            load.assert_called_with(stability.MODEL_ID)
+            predictions = stability.predict_robustness(
+                "qwen3-8b:low",
+                ["1 + 1?"],
+                classifier,
+            )
+            self.assertEqual(len(predictions), 1)
+            load.assert_called_with(
+                "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
+            )
 
     def test_empty_and_blank_inputs_do_not_load(self):
         with patch.object(stability, "_load_model") as load:
-            self.assertEqual(stability.predict_robustness("any/model", []), [])
-            self.assertEqual(stability.predict_robustness("any/model", ["", " "]), [False, False])
+            classifier = stability.RobustnessClassifier(hidden_size=2)
+            self.assertEqual(
+                stability.predict_robustness("any/model", [], classifier),
+                [],
+            )
+            self.assertEqual(
+                stability.predict_robustness(
+                    "any/model",
+                    ["", " "],
+                    classifier,
+                ),
+                [False, False],
+            )
             load.assert_not_called()
 
     def test_cache_is_evicted_before_next_checkpoint_loads(self):
@@ -76,7 +100,11 @@ class ModelLoadingTests(unittest.TestCase):
     def test_loading_errors_propagate(self):
         with patch.object(stability, "_load_model", side_effect=OSError("checkpoint not cached")):
             with self.assertRaisesRegex(OSError, "checkpoint not cached"):
-                stability.predict_robustness("missing/model", ["1 + 1?"])
+                stability.predict_robustness(
+                    "missing/model",
+                    ["1 + 1?"],
+                    stability.RobustnessClassifier(hidden_size=2),
+                )
 
 
 if __name__ == "__main__":
