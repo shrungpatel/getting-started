@@ -1,5 +1,18 @@
 # AIMO Interpretability Challenge
 
+## Final Submissions
+
+```text
+layer-34-probe
+```
+
+and
+
+```text
+solutions/
+└── causal-stability/
+```
+
 This repo contains a guideline for developing and submitting a method into the [AIMO Interpretability Challenge](https://aimo-interp.github.io/). It uses the
 **representation classifier probe** as a complete, working example.
 
